@@ -6591,6 +6591,7 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
 
     case AttributeList::AT_HC_CPU:
     case AttributeList::AT_HC_HC:
+    case AttributeList::AT_HCWavesPerEU: 
     case AttributeList::IgnoredAttribute:
       break;
 
