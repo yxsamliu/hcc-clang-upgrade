@@ -11800,6 +11800,59 @@ Sema::ActOnCXXForRangeIdentifier(Scope *S, SourceLocation IdentLoc,
                        AttrEnd.isValid() ? AttrEnd : IdentLoc);
 }
 
+/// True if the expression is valid for the initialization expression of a
+/// C++AMP global array.
+static bool checkCXXAMPGlobalArrayInitExpr(Stmt *E) {
+  if (getenv("DBG_CTOR")) {
+    llvm::errs() << "check:\n";
+    E->dump();
+  }
+  if (auto *CE = dyn_cast<CXXConstructExpr>(E)) {
+    auto *CD = CE->getConstructor();
+    if (getenv("DBG_CTOR")) {
+      llvm::errs() << "constructor:\n";
+      CD->dump();
+      llvm::errs() << "bad ? "
+                   << (CD->hasAttr<CXXAMPRestrictAMPAttr>() &&
+                       !CD->hasAttr<CXXAMPRestrictCPUAttr>())
+                   << '\n';
+    }
+    if (CD->hasAttr<CXXAMPRestrictAMPAttr>() &&
+        !CD->hasAttr<CXXAMPRestrictCPUAttr>())
+      return false;
+    for (auto I : CE->arguments()) {
+      if (!checkCXXAMPGlobalArrayInitExpr(I))
+        return false;
+    }
+    for (auto I : CD->inits()) {
+      if (!checkCXXAMPGlobalArrayInitExpr(I->getInit()))
+        return false;
+    }
+    return true;
+  } else if (auto *EWC = dyn_cast<ExprWithCleanups>(E)) {
+    for (auto I : EWC->children()) {
+      if (!checkCXXAMPGlobalArrayInitExpr(I))
+        return false;
+    }
+    return true;
+  } else if (auto *IL = dyn_cast<InitListExpr>(E)) {
+    for (auto I : IL->children()) {
+      if (!checkCXXAMPGlobalArrayInitExpr(I))
+        return false;
+    }
+    return true;
+  } else if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E)) {
+    return checkCXXAMPGlobalArrayInitExpr(MTE->GetTemporaryExpr());
+  } else if (auto *CBE = dyn_cast<CXXBindTemporaryExpr>(E)) {
+    return checkCXXAMPGlobalArrayInitExpr(CBE->getSubExpr());
+  } else if (auto *IC = dyn_cast<ImplicitCastExpr>(E)) {
+    return checkCXXAMPGlobalArrayInitExpr(IC->getSubExpr());
+  } else if (auto *FC = dyn_cast<CXXFunctionalCastExpr>(E)) {
+    return checkCXXAMPGlobalArrayInitExpr(FC->getSubExpr());
+  }
+  return true;
+}
+
 void Sema::CheckCompleteVariableDeclaration(VarDecl *var) {
   if (var->isInvalidDecl()) return;
 
@@ -11974,15 +12027,17 @@ void Sema::CheckCompleteVariableDeclaration(VarDecl *var) {
       //     A arr[5];   // Error: Array initialization in global scope, CPU restricted by default
       //
       if(RDecl && RDecl->hasUserDeclaredConstructor()) {
-        for ( CXXRecordDecl::ctor_iterator CtorIt= RDecl->ctor_begin(),
-              CtorItE= RDecl->ctor_end(); CtorIt != CtorItE; ++CtorIt) {
-          if(CtorIt->hasAttr<CXXAMPRestrictAMPAttr>() &&
-            !CtorIt->hasAttr<CXXAMPRestrictCPUAttr>()) {
-            //FIXME: should find Best->function and test its constructor
-            Diag(var->getLocation(), diag::err_amp_call_from_cpu_to_amp);
-            break;
-          }
+        if (getenv("DBG_CTOR")) {
+          llvm::errs() << "XXXXX Got you!\n";
+          // llvm::errs() << "struct decl:\n"; RDecl->dump();
+          // llvm::errs() << "bad constructor:\n"; CtorIt->dump();
+          llvm::errs() << "var:\n";
+          var->dump();
+          llvm::errs() << "init:\n";
+          var->getInit()->dump();
         }
+        if (!checkCXXAMPGlobalArrayInitExpr(var->getInit()))
+          Diag(var->getLocation(), diag::err_amp_call_from_cpu_to_amp);
       }
     }
   }
